@@ -71,9 +71,12 @@ class AsyncGoogleSheetsService(IAsyncSheetsService):
 
         logger.info(f"Wrote {len(data)-1} rows to '{tab_name}' [ASYNC]")
 
+        # ⚠️ ИСПРАВЛЕНИЕ: Определяем тип листа по column_range
+        use_pokerhub = column_range == "A:X"
+
         import asyncio
         await asyncio.gather(
-            self._apply_formatting(ws, start_row, len(data)),
+            self._apply_formatting(ws, start_row, len(data), use_pokerhub),
             self._clear_tail(ws, start_row, len(data), column_range) if clear_tail else asyncio.sleep(0)
         )
 
@@ -100,16 +103,18 @@ class AsyncGoogleSheetsService(IAsyncSheetsService):
 
         return [[format_value(v) for v in row] for row in data]
 
-    async def _apply_formatting(self, ws, start_row: int, data_len: int) -> None:
+    async def _apply_formatting(self, ws, start_row: int, data_len: int, use_pokerhub: bool = False) -> None:
+        """
+        Apply formatting to sheet based on type
+
+        Args:
+            ws: Worksheet object
+            start_row: Starting row number
+            data_len: Number of data rows
+            use_pokerhub: True for pokerhub_robot (A:X), False for standard bots (A:R)
+        """
         try:
             from utils.helpers import get_column_index
-
-            cols = {
-                'funnel_history': get_column_index('M'),
-                'group': get_column_index('T'),
-                'courses': get_column_index('U'),
-                'lessons': get_column_index('V')
-            }
 
             sheet_id = ws.id
             last_row = start_row + data_len - 1
@@ -126,58 +131,108 @@ class AsyncGoogleSheetsService(IAsyncSheetsService):
 
             requests = []
 
-            for col_name in ['funnel_history', 'group', 'lessons']:
-                col_idx = cols[col_name]
+            if use_pokerhub:
+                # ========== POKERHUB_ROBOT (A:X) ==========
+                logger.debug(f"Applying PokerHub formatting for '{ws.title}'")
+
+                cols = {
+                    'funnel_history': get_column_index('M'),
+                    'group': get_column_index('T'),
+                    'courses': get_column_index('U'),
+                    'lessons': get_column_index('V')
+                }
+
+                # funnel_history, group, lessons - CLIP
+                for col_name in ['funnel_history', 'group', 'lessons']:
+                    col_idx = cols[col_name]
+                    requests.append({
+                        "repeatCell": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": start_row - 1,
+                                "endRowIndex": last_row,
+                                "startColumnIndex": col_idx - 1,
+                                "endColumnIndex": col_idx
+                            },
+                            "cell": {"userEnteredFormat": clip_format},
+                            "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)"
+                        }
+                    })
+
+                # courses - WRAP (чтобы MTT1, MTT2 были видны построчно)
                 requests.append({
                     "repeatCell": {
                         "range": {
                             "sheetId": sheet_id,
                             "startRowIndex": start_row - 1,
                             "endRowIndex": last_row,
-                            "startColumnIndex": col_idx - 1,
-                            "endColumnIndex": col_idx
+                            "startColumnIndex": cols['courses'] - 1,
+                            "endColumnIndex": cols['courses']
+                        },
+                        "cell": {"userEnteredFormat": wrap_format},
+                        "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)"
+                    }
+                })
+
+                # Ширина столбцов для PokerHub
+                column_widths = {
+                    'funnel_history': 100,
+                    'group': 120,
+                    'courses': 80,
+                    'lessons': 200
+                }
+
+                for col_name, width in column_widths.items():
+                    col_idx = cols[col_name]
+                    requests.append({
+                        "updateDimensionProperties": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "dimension": "COLUMNS",
+                                "startIndex": col_idx - 1,
+                                "endIndex": col_idx
+                            },
+                            "properties": {"pixelSize": width},
+                            "fields": "pixelSize"
+                        }
+                    })
+            else:
+                # ========== STANDARD BOTS (A:R) ==========
+                logger.debug(f"Applying standard formatting for '{ws.title}'")
+
+                funnel_col = get_column_index('M')
+
+                # funnel_history - CLIP, узкий столбец
+                requests.append({
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": start_row - 1,
+                            "endRowIndex": last_row,
+                            "startColumnIndex": funnel_col - 1,
+                            "endColumnIndex": funnel_col
                         },
                         "cell": {"userEnteredFormat": clip_format},
                         "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)"
                     }
                 })
 
-            requests.append({
-                "repeatCell": {
-                    "range": {
-                        "sheetId": sheet_id,
-                        "startRowIndex": start_row - 1,
-                        "endRowIndex": last_row,
-                        "startColumnIndex": cols['courses'] - 1,
-                        "endColumnIndex": cols['courses']
-                    },
-                    "cell": {"userEnteredFormat": wrap_format},
-                    "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)"
-                }
-            })
-
-            column_widths = {
-                'funnel_history': 100,
-                'group': 120,
-                'courses': 80,
-                'lessons': 200
-            }
-
-            for col_name, width in column_widths.items():
-                col_idx = cols[col_name]
+                # Ширина столбца funnel_history
                 requests.append({
                     "updateDimensionProperties": {
                         "range": {
                             "sheetId": sheet_id,
                             "dimension": "COLUMNS",
-                            "startIndex": col_idx - 1,
-                            "endIndex": col_idx
+                            "startIndex": funnel_col - 1,
+                            "endIndex": funnel_col
                         },
-                        "properties": {"pixelSize": width},
+                        "properties": {"pixelSize": 100},
                         "fields": "pixelSize"
                     }
                 })
 
+            # ========== ОБЩЕЕ ДЛЯ ВСЕХ ТИПОВ ЛИСТОВ ==========
+            # Фиксированная высота строк
             requests.append({
                 "updateDimensionProperties": {
                     "range": {
@@ -191,12 +246,13 @@ class AsyncGoogleSheetsService(IAsyncSheetsService):
                 }
             })
 
+            # Выполняем все запросы форматирования
             if requests:
                 await self.spreadsheet.batch_update(body={"requests": requests})
-                logger.debug("Formatting applied successfully [ASYNC]")
+                logger.debug(f"Formatting applied for '{ws.title}' [ASYNC]")
 
         except Exception as e:
-            logger.warning(f"Failed to apply formatting: {e}")
+            logger.warning(f"Failed to apply formatting for '{ws.title}': {e}")
 
     async def _clear_tail(self, ws, start_row: int, data_len: int, column_range: str) -> None:
         from utils.helpers import get_column_range_end

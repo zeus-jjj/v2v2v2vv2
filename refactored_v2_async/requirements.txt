@@ -1,35 +1,43 @@
+# ==================== ASYNC DATABASE ====================
 asyncpg==0.31.0
 asyncssh==2.14.2
 sshtunnel==0.4.0
 
+# ==================== GOOGLE SHEETS ====================
 gspread-asyncio==1.9.0
 gspread==5.10.0
 google-auth==2.25.2
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 
+# ==================== HTTP & API ====================
 aiohttp==3.9.1
 requests==2.31.0
 
+# ==================== ASYNC UTILITIES ====================
 aiocache==0.12.2
 aiofiles==23.2.1
 
-# Scheduling
+# ==================== SCHEDULING ====================
 schedule==1.2.1
 
+# ==================== CONFIGURATION ====================
 python-dotenv==1.0.0
 pydantic==2.5.3
 pydantic-settings==2.1.0
+pyyaml==6.0.1
 
+# ==================== DEPENDENCY INJECTION ====================
 injector==0.21.0
 
+# ==================== TESTING ====================
 pytest==7.4.3
 pytest-cov==4.1.0
 pytest-mock==3.12.0
 pytest-asyncio==0.23.2
 
+# ==================== CODE QUALITY ====================
 mypy==1.7.1
-
 black==23.12.1
 flake8==7.0.0
 isort==5.13.2

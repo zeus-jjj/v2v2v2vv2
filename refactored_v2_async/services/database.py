@@ -1,6 +1,8 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
+import platform
 import asyncpg
 import asyncssh
+from sshtunnel import SSHTunnelForwarder
 
 from interfaces import IAsyncDatabaseService
 from models import DatabaseConfig
@@ -15,8 +17,10 @@ class AsyncPostgreSQLService(IAsyncDatabaseService):
     def __init__(self, config: DatabaseConfig):
         self.config = config
         self.pool: Optional[asyncpg.Pool] = None
-        self.tunnel: Optional[asyncssh.SSHClientConnection] = None
+        self.tunnel: Optional[Union[asyncssh.SSHClientConnection, SSHTunnelForwarder]] = None
         self.listener = None
+        self.is_async_tunnel: bool = False  # Флаг для определения типа туннеля
+        self.local_port: Optional[int] = None
 
     async def __aenter__(self):
         await self.connect()
@@ -55,36 +59,71 @@ class AsyncPostgreSQLService(IAsyncDatabaseService):
             await self.pool.close()
             logger.info(f"Disconnected from database: {self.config.name}")
 
+        # Закрываем listener (только для async tunnel)
         if self.listener:
             self.listener.close()
             await self.listener.wait_closed()
 
+        # Закрываем tunnel (зависит от типа)
         if self.tunnel:
-            self.tunnel.close()
-            await self.tunnel.wait_closed()
-            logger.info(f"SSH tunnel stopped for {self.config.name}")
+            if self.is_async_tunnel:
+                # Async tunnel (Linux/Mac)
+                self.tunnel.close()
+                await self.tunnel.wait_closed()
+                logger.info(f"Async SSH tunnel stopped for {self.config.name}")
+            else:
+                # Sync tunnel (Windows)
+                self.tunnel.stop()
+                logger.info(f"Sync SSH tunnel stopped for {self.config.name}")
 
     async def _setup_ssh_tunnel(self) -> None:
         ssh_cfg = self.config.ssh_config
 
-        self.tunnel = await asyncssh.connect(
-            ssh_cfg.host,
-            port=ssh_cfg.port,
-            username=ssh_cfg.user,
-            password=ssh_cfg.password,
-            known_hosts=None,
-        )
+        # Определяем ОС и выбираем метод создания туннеля
+        if platform.system() == "Windows":
+            # ========== WINDOWS: Синхронный SSH tunnel ==========
+            logger.info(f"Detected Windows OS. Using synchronous SSH tunnel for {self.config.name}")
 
-        self.listener = await self.tunnel.forward_local_port(
-            '127.0.0.1',
-            0,
-            self.config.host,
-            self.config.port
-        )
+            self.tunnel = SSHTunnelForwarder(
+                (ssh_cfg.host, ssh_cfg.port),
+                ssh_username=ssh_cfg.user,
+                ssh_password=ssh_cfg.password,
+                remote_bind_address=(self.config.host, self.config.port),
+            )
+            self.tunnel.start()
+            self.local_port = self.tunnel.local_bind_port
+            self.is_async_tunnel = False
 
-        self.local_port = self.listener.get_port()
+            logger.info(
+                f"Sync SSH tunnel created for {self.config.name}. "
+                f"Local port: {self.local_port}"
+            )
+        else:
+            # ========== LINUX/MAC: Асинхронный SSH tunnel ==========
+            logger.info(f"Detected {platform.system()} OS. Using async SSH tunnel for {self.config.name}")
 
-        logger.info(f"SSH tunnel created for {self.config.name} [ASYNC]")
+            self.tunnel = await asyncssh.connect(
+                ssh_cfg.host,
+                port=ssh_cfg.port,
+                username=ssh_cfg.user,
+                password=ssh_cfg.password,
+                known_hosts=None,
+            )
+
+            self.listener = await self.tunnel.forward_local_port(
+                '127.0.0.1',
+                0,
+                self.config.host,
+                self.config.port
+            )
+
+            self.local_port = self.listener.get_port()
+            self.is_async_tunnel = True
+
+            logger.info(
+                f"Async SSH tunnel created for {self.config.name}. "
+                f"Local port: {self.local_port} [ASYNC]"
+            )
 
     @measure_time(threshold_seconds=10.0)
     @log_errors()

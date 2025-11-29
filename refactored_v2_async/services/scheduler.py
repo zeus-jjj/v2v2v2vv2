@@ -1,7 +1,8 @@
 import asyncio
 import random
 import logging
-from typing import List, Dict, Any, Callable
+import signal
+from typing import List, Dict, Any, Callable, Optional, Set
 from injector import inject
 
 from models import Settings, DatabaseConfig
@@ -11,6 +12,43 @@ from decorators import log_execution, log_errors, measure_time
 from utils.helpers import make_status_line, get_column_index, get_column_range_end, parse_to_gs_date
 
 logger = logging.getLogger(__name__)
+
+
+class HealthCheckService:
+    """Simple health check service for monitoring"""
+
+    def __init__(self):
+        from datetime import datetime
+        self.last_update: Optional[datetime] = None
+        self.update_count: int = 0
+        self.error_count: int = 0
+        self.is_healthy: bool = True
+
+    def record_update_start(self) -> None:
+        """Record start of update cycle"""
+        from datetime import datetime
+        self.last_update = datetime.now()
+
+    def record_update_success(self) -> None:
+        """Record successful update"""
+        self.update_count += 1
+        self.is_healthy = True
+
+    def record_error(self) -> None:
+        """Record error"""
+        self.error_count += 1
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current health status"""
+        from datetime import datetime
+        return {
+            "status": "healthy" if self.is_healthy else "unhealthy",
+            "last_update": self.last_update.isoformat() if self.last_update else None,
+            "update_count": self.update_count,
+            "error_count": self.error_count,
+            "uptime": (datetime.now() - self.last_update).total_seconds()
+                      if self.last_update else 0
+        }
 
 
 class AsyncScheduler:
@@ -33,6 +71,13 @@ class AsyncScheduler:
         self.db_service_factory = db_service_factory
         self.db_configs: List[DatabaseConfig] = []
 
+        # Graceful shutdown support
+        self._shutdown_event = asyncio.Event()
+        self._running_tasks: Set[asyncio.Task] = set()
+
+        # Health check
+        self.health_check = HealthCheckService()
+
     @log_execution()
     async def run(self) -> None:
         logger.info("=" * 80)
@@ -44,6 +89,9 @@ class AsyncScheduler:
 
         await self.sheets_service.connect()
 
+        # Setup signal handlers for graceful shutdown
+        self._setup_signal_handlers()
+
         logger.info("Performing initial update (CONCURRENT)...")
         await self.update_all_sheets()
         logger.info("Initial update completed")
@@ -52,13 +100,64 @@ class AsyncScheduler:
             f"Entering update loop. Interval: {self.settings.update_interval_minutes} minutes..."
         )
 
-        while True:
-            await asyncio.sleep(self.settings.update_interval_minutes * 60)
-            await self.update_all_sheets()
+        # Main loop with graceful shutdown support
+        while not self._shutdown_event.is_set():
+            try:
+                # Wait for either timeout or shutdown signal
+                await asyncio.wait_for(
+                    self._shutdown_event.wait(),
+                    timeout=self.settings.update_interval_minutes * 60
+                )
+            except asyncio.TimeoutError:
+                # Timeout reached - time to update
+                if not self._shutdown_event.is_set():
+                    await self.update_all_sheets()
+
+        logger.info("Scheduler stopped gracefully ✅")
+
+    def _setup_signal_handlers(self) -> None:
+        """Setup handlers for graceful shutdown"""
+        try:
+            # Try to setup signal handlers (works on Unix-like systems)
+            loop = asyncio.get_running_loop()
+
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(
+                    sig,
+                    lambda s=sig: asyncio.create_task(self._handle_shutdown(s))
+                )
+
+            logger.info("Signal handlers configured (Unix)")
+        except (NotImplementedError, AttributeError):
+            # Windows doesn't support add_signal_handler
+            logger.warning(
+                "Signal handlers not supported on this platform (Windows). "
+                "Use Ctrl+C for shutdown."
+            )
+
+    async def _handle_shutdown(self, sig: signal.Signals) -> None:
+        """Handle shutdown signal"""
+        logger.info("=" * 80)
+        logger.info(f"Received signal {sig.name}. Initiating graceful shutdown...")
+        logger.info("=" * 80)
+
+        # Set shutdown flag
+        self._shutdown_event.set()
+
+        # Wait for running tasks to complete
+        if self._running_tasks:
+            logger.info(f"Waiting for {len(self._running_tasks)} tasks to complete...")
+            await asyncio.gather(*self._running_tasks, return_exceptions=True)
+            logger.info("All tasks completed")
+
+        logger.info("Shutdown complete ✅")
 
     @measure_time(threshold_seconds=60.0)
     @log_execution()
     async def update_all_sheets(self) -> None:
+        # Record update start for health check
+        self.health_check.record_update_start()
+
         logger.info(f"Starting CONCURRENT update of {len(self.db_configs)} sheets...")
 
         tasks = [
@@ -68,14 +167,24 @@ class AsyncScheduler:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        error_count = 0
         for i, result in enumerate(results):
             if isinstance(result, Exception):
+                error_count += 1
+                self.health_check.record_error()
                 config = self.db_configs[i]
                 logger.error(
                     f"Error updating {config.name} -> '{config.sheet_tab_name}': {result}"
                 )
 
-        logger.info(f"All {len(self.db_configs)} sheets updated (CONCURRENT) ✅")
+        # Record success if no errors
+        if error_count == 0:
+            self.health_check.record_update_success()
+            logger.info(f"All {len(self.db_configs)} sheets updated (CONCURRENT) ✅")
+        else:
+            logger.warning(
+                f"Update completed with {error_count}/{len(self.db_configs)} errors ⚠️"
+            )
 
     @measure_time(threshold_seconds=30.0)
     @log_errors()
