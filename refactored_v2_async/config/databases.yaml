@@ -1,0 +1,67 @@
+
+databases:
+  - name: tgads_bot1
+    sheet_tab: MetaMoves_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: tgads_bot2
+    sheet_tab: DeepDesk_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: tgads_bot3
+    sheet_tab: ZeroTilt_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: tgads_bot4
+    sheet_tab: RoyalFrag_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: tgads_bot5
+    sheet_tab: MindTilt_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: tgads_bot6
+    sheet_tab: MindRoyal_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: tgads_mindgamesup_bot
+    sheet_tab: Mindgamesup_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: tgads_logicdrill_bd
+    sheet_tab: logicdrill_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: tgads_rangemind_bd
+    sheet_tab: rangemind_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: tgads_cortexflex_bd
+    sheet_tab: cortexflex_bot
+    column_range: A:R
+    use_ssh: false
+    use_pokerhub: false
+
+  - name: lead
+    sheet_tab: pokerhub_robot
+    column_range: A:X
+    use_ssh: true
+    use_pokerhub: true
