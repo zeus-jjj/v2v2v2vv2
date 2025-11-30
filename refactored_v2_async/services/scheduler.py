@@ -155,10 +155,15 @@ class AsyncScheduler:
     @measure_time(threshold_seconds=60.0)
     @log_execution()
     async def update_all_sheets(self) -> None:
+        import time
+        
         # Record update start for health check
         self.health_check.record_update_start()
+        cycle_start_time = time.time()
 
-        logger.info(f"Starting CONCURRENT update of {len(self.db_configs)} sheets...")
+        logger.info("=" * 80)
+        logger.info(f"🔄 UPDATE CYCLE STARTED | Databases: {len(self.db_configs)}")
+        logger.info("=" * 80)
 
         tasks = [
             self._update_single_sheet(config)
@@ -168,30 +173,46 @@ class AsyncScheduler:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         error_count = 0
+        success_count = 0
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 error_count += 1
                 self.health_check.record_error()
                 config = self.db_configs[i]
                 logger.error(
-                    f"Error updating {config.name} -> '{config.sheet_tab_name}': {result}"
+                    f"❌ Error updating {config.name} -> '{config.sheet_tab_name}': {result}"
                 )
+            else:
+                success_count += 1
+
+        cycle_duration = time.time() - cycle_start_time
 
         # Record success if no errors
+        logger.info("=" * 80)
         if error_count == 0:
             self.health_check.record_update_success()
-            logger.info(f"All {len(self.db_configs)} sheets updated (CONCURRENT) ✅")
+            logger.info(f"✅ ALL SHEETS UPDATED SUCCESSFULLY")
+            logger.info(f"   └─ Total databases: {len(self.db_configs)}")
+            logger.info(f"   └─ Total time: {cycle_duration:.2f}s")
+            logger.info(f"   └─ Average: {cycle_duration/len(self.db_configs):.2f}s per database")
         else:
             logger.warning(
-                f"Update completed with {error_count}/{len(self.db_configs)} errors ⚠️"
+                f"⚠️  UPDATE COMPLETED WITH ERRORS"
             )
+            logger.warning(f"   └─ Success: {success_count}/{len(self.db_configs)}")
+            logger.warning(f"   └─ Errors: {error_count}/{len(self.db_configs)}")
+            logger.warning(f"   └─ Total time: {cycle_duration:.2f}s")
+        logger.info("=" * 80)
 
     @measure_time(threshold_seconds=30.0)
     @log_errors()
     async def _update_single_sheet(self, config: DatabaseConfig) -> None:
+        import time
+        
         tab = config.sheet_tab_name
+        sheet_start_time = time.time()
 
-        logger.info(f"Updating '{tab}'...")
+        logger.info(f"📊 Updating '{tab}'...")
 
         async with self.db_service_factory(config) as db:
             data = await db.fetch_data()
@@ -223,7 +244,12 @@ class AsyncScheduler:
         status = make_status_line(tab, len(user_data))
         await self.sheets_service.update_status(tab, status)
 
-        logger.info(f"✓ Updated: {config.name} -> '{tab}', rows: {len(user_data)}")
+        sheet_duration = time.time() - sheet_start_time
+        logger.info(
+            f"   ✓ {config.name} -> '{tab}' | "
+            f"rows: {len(user_data)} | "
+            f"time: {sheet_duration:.2f}s"
+        )
 
         await asyncio.sleep(0.1 + random.uniform(0, 0.2))
 
@@ -323,9 +349,25 @@ class AsyncScheduler:
         else:
             group = str(group_items) if group_items else ''
 
-        user_last_action_datetime = parse_to_gs_date(
-            row[-2].strftime('%Y-%m-%d %H:%M:%S')
-        ) if row[-2] else ""
+        # 🔧 ИСПРАВЛЕНИЕ: проверяем тип перед strftime
+        # row[-2] может быть уже строкой из БД или datetime объектом
+        if row[-2]:
+            if isinstance(row[-2], str):
+                # Уже строка - просто форматируем для GS
+                user_last_action_datetime = parse_to_gs_date(row[-2])
+            else:
+                # datetime объект - конвертируем в строку
+                from datetime import datetime
+                if isinstance(row[-2], datetime):
+                    user_last_action_datetime = parse_to_gs_date(
+                        row[-2].strftime('%Y-%m-%d %H:%M:%S')
+                    )
+                else:
+                    # На всякий случай - конвертируем в строку
+                    user_last_action_datetime = parse_to_gs_date(str(row[-2]))
+        else:
+            user_last_action_datetime = ""
+        
         user_last_funnel_state = row[-1] or ""
 
         new_row = row[:-2] + [

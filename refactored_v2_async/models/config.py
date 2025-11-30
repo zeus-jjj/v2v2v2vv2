@@ -49,30 +49,40 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file='.env',
         env_file_encoding='utf-8',
-        case_sensitive=False
+        case_sensitive=False,
+        extra='ignore'  # ← ИЗМЕНЕНО: теперь игнорирует неизвестные поля
     )
 
+    # Google Sheets
     spreadsheet_url: str
     service_account_file: str
 
+    # PostgreSQL
     db_user: str = "postgres"
     db_password: str
     db_host: str = "127.0.0.1"
     db_port: int = 5432
 
+    # SSH (optional)
     ssh_host: Optional[str] = None
     ssh_user: Optional[str] = None
     ssh_password: Optional[str] = None
     ssh_port: int = 22
     remote_db_port: int = 5432
 
+    # PokerHub API
     pokerhub_api_url: str = "https://pokerhub.pro/api/tg/getusers"
 
+    # Scheduler
     update_interval_minutes: int = 60
 
+    # Other
     timezone: str = "Europe/Moscow"
-
     log_level: str = "INFO"
+
+    # ← ДОБАВЛЕНО: новые поля для конфигурации
+    log_file: str = "pokerhub_extractor.log"
+    db_config_file: str = "config/databases.yaml"
 
     @property
     def google_sheets_config(self) -> GoogleSheetsConfig:

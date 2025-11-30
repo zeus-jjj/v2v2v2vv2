@@ -1,8 +1,8 @@
 # ==================== ASYNC DATABASE ====================
 asyncpg==0.31.0
-asyncssh==2.14.2
+asyncssh==2.16.0
 sshtunnel==0.4.0
-
+paramiko==3.5.1
 # ==================== GOOGLE SHEETS ====================
 gspread-asyncio==1.9.0
 gspread==5.10.0

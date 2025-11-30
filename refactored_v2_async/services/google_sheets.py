@@ -38,7 +38,7 @@ class AsyncGoogleSheetsService(IAsyncSheetsService):
 
         logger.info("Connected to Google Sheets [ASYNC]")
 
-    @measure_time(threshold_seconds=15.0)
+    @measure_time(threshold_seconds=10.0)
     @async_retry(max_attempts=5, base_delay=1.0)
     @log_errors()
     async def update_sheet(
@@ -63,22 +63,24 @@ class AsyncGoogleSheetsService(IAsyncSheetsService):
         str_data = self._to_str_grid(data)
 
         start_cell = f"A{start_row}"
-        await ws.update(
-            str_data,
-            start_cell,
-            value_input_option='USER_ENTERED'
+        
+        # 🚀 ОПТИМИЗАЦИЯ: Определяем тип листа по column_range
+        use_pokerhub = column_range == "A:X"
+        
+        logger.debug(f"Writing {len(data)-1} rows to '{tab_name}' [ASYNC]")
+        
+        # 🚀 ОПТИМИЗАЦИЯ: Параллельное выполнение upload + formatting
+        import asyncio
+        await asyncio.gather(
+            ws.update(str_data, start_cell, value_input_option='USER_ENTERED'),
+            self._apply_formatting(ws, start_row, len(data), use_pokerhub)
         )
 
         logger.info(f"Wrote {len(data)-1} rows to '{tab_name}' [ASYNC]")
 
-        # ⚠️ ИСПРАВЛЕНИЕ: Определяем тип листа по column_range
-        use_pokerhub = column_range == "A:X"
-
-        import asyncio
-        await asyncio.gather(
-            self._apply_formatting(ws, start_row, len(data), use_pokerhub),
-            self._clear_tail(ws, start_row, len(data), column_range) if clear_tail else asyncio.sleep(0)
-        )
+        # Очистка хвоста (после записи, не параллельно)
+        if clear_tail:
+            await self._clear_tail(ws, start_row, len(data), column_range)
 
     @async_retry(max_attempts=3)
     async def update_status(self, tab_name: str, status: str) -> None:
